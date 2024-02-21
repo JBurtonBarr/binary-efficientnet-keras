@@ -6,3 +6,5 @@ Notes:
  * Just install the requirements and run the script from cmd, with (small) data example included this should work
 
 Folder structure: Data -> Train -> 0, 1
+
+Note that the example dataset included is not ideal for binary classification due to its small size.
