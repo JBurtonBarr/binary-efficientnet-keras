@@ -1,62 +1,75 @@
-import tensorflow as tf
-from efficientnet.tfkeras import EfficientNetB0
-from tensorflow.keras.layers import Dense, GlobalAveragePooling2D #Specific function calls to reduce package loading
+import cv2
+import os
+import numpy as np
 from tensorflow.keras.models import Model
-from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.applications import EfficientNetB0
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D, Dropout
+from tensorflow.keras.optimizers import RMSprop
 from tensorflow.keras.losses import BinaryCrossentropy
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
-import glob
 
+augmentation = False
 
+def augment(img):
+    #add any image augmentation here
+    if np.random.rand() < 0.5:
+        img = cv2.flip(img, 1) #horizontal flip, example add more with seperate probs
+    #if np.random.rand() < 0.2:
+    return img
 
 def efficientnet_binary(input_shape=(224, 224, 3), num_classes=1):
-    base = EfficientNetB0(weights='imagenet', include_top=False, input_shape=input_shape)
+    base = EfficientNetB0(weights='imagenet', include_top=False, input_shape=input_shape, classes=num_classes)
+    #may set weights to false, imagenet for transfer learning
 
     x = GlobalAveragePooling2D()(base.output)
-    x = Dense(256, activation='relu')(x)
-    x = tf.keras.layers.Dropout(0.5)(x)
-    output = Dense(num_classes, activation='sigmoid')(x)
+    output = Dense(num_classes, activation='sigmoid')(x) # change head to binary
 
     model = Model(inputs=base.input, outputs=output)
 
     return model
 
 
-def create_dataset():
-    # Image size and batch size, i.e for B0 we use 224 x 224
-    img_size = (224, 224)
-    batch_size = 32 #does not effect model params
+def load_images_and_labels(directory, img_size=(224, 224)):
+    #set up for a binary folder structure (e.g. train(folder) -> 0 (sub-folder), 1 (sub-folder))
+    images = []
+    labels = []
 
-    t_norm = ImageDataGenerator(rescale=1./255)#normalization is important
-    v_norm = ImageDataGenerator(rescale=1./255)
+    for label in os.listdir(directory):
+        label_path = os.path.join(directory, label)
+        for filename in os.listdir(label_path):
+            img_path = os.path.join(label_path, filename)
+            
+            # Load image with cv2
+            img = cv2.imread(img_path)
+            img = cv2.resize(img, img_size)
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)  # BGR to RGB
+            img = img / 255.0  # Normalization is important
 
-    train_dataset = t_norm.flow_from_directory(
-        train_dir,
-        target_size=img_size,
-        batch_size=batch_size,
-        class_mode='binary'  
-    )
+            if augmentation==True:
+                if np.random.rand() < 0.5: #augmentation chance, do for half images
+                    aug_img = augment(img)
+                    images.append(aug_img)
+                    labels.append(int(label))
+                
+            images.append(img)
+            labels.append(int(label))  # Use folder name as label
 
-    val_dataset = v_norm.flow_from_directory(
-        val_dir,
-        target_size=img_size,
-        batch_size=batch_size,
-        class_mode='binary'
-    )
+    return np.array(images), np.array(labels)
 
 
+train_dir = './data/mask/train' #need to split your data into val (0 and 1) and train (0 and 1) sub-folders
+val_dir = './data/mask/val'
 
-train_dir = 'path/to/your/dataset/train' #need to split your data into val (0 and 1) and train (0 and 1) sub-folders
-val_dir = 'path/to/your/dataset/validation'
+# Load and preprocess images
+train_images, train_labels = load_images_and_labels(train_dir)
+val_images, val_labels = load_images_and_labels(val_dir)
 
 # Create an instance of the model
 model = efficientnet_binary()
 
-model.compile(optimizer=Adam(), loss=BinaryCrossentropy(), metrics=['accuracy'])
-
-train_dataset, val_dataset = create_dataset(train_dir, val_dir)
+#for small datasets make sure learning rate is not too high!
+model.compile(optimizer=RMSprop(learning_rate=0.000005), loss='binary_crossentropy', metrics=['accuracy'])
 
 # Train model
-model.fit(train_dataset, epochs=10, validation_data=val_dataset)
+model.fit(train_images, train_labels, epochs=40, batch_size=4, validation_data=(val_images, val_labels))
 
 model.save('binary_efficientnet_b0_model.h5')
